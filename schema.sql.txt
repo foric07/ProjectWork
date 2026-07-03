@@ -1,0 +1,117 @@
+CREATE TABLE employees (
+    id SERIAL PRIMARY KEY,
+    full_name VARCHAR(150) NOT NULL,
+    email VARCHAR(100) UNIQUE NOT NULL,
+    position VARCHAR(100),
+    hire_date DATE DEFAULT CURRENT_DATE
+);
+
+CREATE TABLE lead_sources (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(100) NOT NULL UNIQUE
+);
+
+CREATE TABLE companies (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(200) NOT NULL,
+    industry VARCHAR(100),
+    phone VARCHAR(30),
+    email VARCHAR(100),
+    address TEXT,
+    primary_contact_id INTEGER,  -- будет обновлён после создания contacts
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    custom_fields JSONB DEFAULT '{}'::jsonb
+);
+
+CREATE TABLE contacts (
+    id SERIAL PRIMARY KEY,
+    company_id INTEGER REFERENCES companies(id) ON DELETE SET NULL,
+    first_name VARCHAR(100) NOT NULL,
+    last_name VARCHAR(100) NOT NULL,
+    phone VARCHAR(30),
+    email VARCHAR(100),
+    position VARCHAR(100),
+    is_primary BOOLEAN DEFAULT false,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    custom_fields JSONB DEFAULT '{}'::jsonb
+);
+
+ALTER TABLE companies ADD CONSTRAINT fk_primary_contact
+    FOREIGN KEY (primary_contact_id) REFERENCES contacts(id) ON DELETE SET NULL;
+
+CREATE TABLE pipeline_stages (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(100) NOT NULL,
+    order_num INTEGER NOT NULL UNIQUE,
+    probability NUMERIC(3,2) CHECK (probability >= 0 AND probability <= 1)
+);
+
+CREATE TABLE products (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(200) NOT NULL,
+    description TEXT,
+    unit_price NUMERIC(12,2) NOT NULL
+);
+
+CREATE TABLE deals (
+    id SERIAL PRIMARY KEY,
+    title VARCHAR(255) NOT NULL,
+    company_id INTEGER REFERENCES companies(id) ON DELETE SET NULL,
+    contact_id INTEGER REFERENCES contacts(id) ON DELETE SET NULL,
+    responsible_employee_id INTEGER REFERENCES employees(id),
+    stage_id INTEGER REFERENCES pipeline_stages(id),
+    source_id INTEGER REFERENCES lead_sources(id),
+    amount NUMERIC(14,2) DEFAULT 0,
+    expected_close_date DATE,
+    actual_close_date DATE,
+    status VARCHAR(20) DEFAULT 'open' CHECK (status IN ('open', 'won', 'lost')),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    custom_fields JSONB DEFAULT '{}'::jsonb
+);
+
+CREATE TABLE deal_items (
+    id SERIAL PRIMARY KEY,
+    deal_id INTEGER REFERENCES deals(id) ON DELETE CASCADE,
+    product_id INTEGER REFERENCES products(id),
+    quantity NUMERIC(10,2) NOT NULL,
+    unit_price NUMERIC(12,2) NOT NULL,
+    CONSTRAINT positive_qty CHECK (quantity > 0)
+);
+
+CREATE TABLE activity_types (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(50) NOT NULL UNIQUE
+);
+
+CREATE TABLE activities (
+    id SERIAL PRIMARY KEY,
+    deal_id INTEGER REFERENCES deals(id) ON DELETE SET NULL,
+    company_id INTEGER REFERENCES companies(id) ON DELETE SET NULL,
+    contact_id INTEGER REFERENCES contacts(id) ON DELETE SET NULL,
+    type_id INTEGER REFERENCES activity_types(id),
+    performed_by_employee_id INTEGER REFERENCES employees(id),
+    subject VARCHAR(255),
+    description TEXT,
+    activity_date TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    duration_minutes INTEGER CHECK (duration_minutes >= 0),
+    outcome VARCHAR(100)
+);
+
+CREATE TABLE xml_import_log (
+    id SERIAL PRIMARY KEY,
+    import_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    source_system VARCHAR(100),
+    xml_data XML
+);
+
+CREATE INDEX idx_deals_status ON deals(status);
+CREATE INDEX idx_deals_expected_close ON deals(expected_close_date);
+CREATE INDEX idx_deals_responsible ON deals(responsible_employee_id);
+CREATE INDEX idx_deals_stage ON deals(stage_id);
+CREATE INDEX idx_deals_company ON deals(company_id);
+CREATE INDEX idx_activities_date ON activities(activity_date);
+CREATE INDEX idx_activities_deal ON activities(deal_id);
+CREATE INDEX idx_contacts_company ON contacts(company_id);
+CREATE INDEX idx_contacts_custom_fields ON contacts USING GIN (custom_fields);
+CREATE INDEX idx_deals_custom_fields ON deals USING GIN (custom_fields);

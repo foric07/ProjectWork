@@ -1,0 +1,78 @@
+-- 1. Процедура перемещения сделки на новый этап с автоматической записью в историю
+CREATE OR REPLACE PROCEDURE move_deal_to_stage(
+    p_deal_id INTEGER,
+    p_new_stage_id INTEGER,
+    p_performed_by INTEGER,
+    p_notes TEXT DEFAULT 'Перемещена по этапу'
+)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_old_stage_id INTEGER;
+    v_deal_amount NUMERIC;
+    v_company_id INTEGER;
+    v_contact_id INTEGER;
+BEGIN
+    -- Получаем текущий этап и данные сделки
+    SELECT stage_id, amount, company_id, contact_id INTO v_old_stage_id, v_deal_amount, v_company_id, v_contact_id
+    FROM deals WHERE id = p_deal_id;
+    
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Сделка с id % не найдена', p_deal_id;
+    END IF;
+    
+    -- Обновляем этап и дату изменения
+    UPDATE deals
+    SET stage_id = p_new_stage_id,
+        updated_at = CURRENT_TIMESTAMP
+    WHERE id = p_deal_id;
+    
+    -- Если новый этап - "Закрыто успешно", фиксируем закрытие
+    IF p_new_stage_id = (SELECT id FROM pipeline_stages WHERE name = 'Закрыто успешно') THEN
+        UPDATE deals SET status = 'won', actual_close_date = CURRENT_DATE WHERE id = p_deal_id;
+    ELSIF p_new_stage_id = (SELECT id FROM pipeline_stages WHERE name = 'Закрыто неуспешно') THEN
+        UPDATE deals SET status = 'lost', actual_close_date = CURRENT_DATE WHERE id = p_deal_id;
+    END IF;
+    
+    -- Записываем активность
+    INSERT INTO activities (deal_id, company_id, contact_id, type_id, performed_by_employee_id, subject, outcome)
+    VALUES (p_deal_id, v_company_id, v_contact_id,
+            (SELECT id FROM activity_types WHERE name = 'Заметка'),
+            p_performed_by,
+            'Переход сделки на этап: ' || (SELECT name FROM pipeline_stages WHERE id = p_new_stage_id),
+            p_notes);
+END;
+$$;
+
+-- 2. Функция расчёта конверсии между двумя этапами
+CREATE OR REPLACE FUNCTION get_stage_conversion(
+    from_stage_name TEXT,
+    to_stage_name TEXT
+) RETURNS TABLE (
+    stage_from TEXT,
+    stage_to TEXT,
+    deals_from BIGINT,
+    deals_to BIGINT,
+    conversion NUMERIC
+)
+LANGUAGE sql
+AS $$
+WITH stage_data AS (
+    SELECT 
+        d.id,
+        ps.name AS stage_name,
+        LEAD(ps.name) OVER (PARTITION BY d.id ORDER BY ps.order_num) AS next_stage
+    FROM deals d
+    JOIN pipeline_stages ps ON d.stage_id = ps.id
+)
+SELECT 
+    from_stage_name,
+    to_stage_name,
+    COUNT(*) FILTER (WHERE stage_name = from_stage_name),
+    COUNT(*) FILTER (WHERE stage_name = from_stage_name AND next_stage = to_stage_name),
+    ROUND(
+        COUNT(*) FILTER (WHERE stage_name = from_stage_name AND next_stage = to_stage_name)::numeric 
+        / NULLIF(COUNT(*) FILTER (WHERE stage_name = from_stage_name), 0) * 100, 1
+    )
+FROM stage_data;
+$$;

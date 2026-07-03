@@ -1,0 +1,59 @@
+-- Представление 1: Воронка продаж в реальном времени (все этапы)
+CREATE OR REPLACE VIEW vw_sales_funnel AS
+SELECT 
+    ps.name AS stage_name,
+    ps.order_num,
+    COUNT(d.id) AS deals_count,
+    COALESCE(SUM(d.amount), 0) AS total_amount,
+    COALESCE(SUM(d.amount * ps.probability), 0) AS weighted_amount
+FROM pipeline_stages ps
+LEFT JOIN deals d ON d.stage_id = ps.id AND d.status = 'open'
+GROUP BY ps.id, ps.name, ps.order_num
+ORDER BY ps.order_num;
+
+-- Представление 2: Показатели эффективности сотрудников (текущий месяц)
+CREATE OR REPLACE VIEW vw_employee_performance_current_month AS
+SELECT 
+    e.id,
+    e.full_name,
+    COUNT(d.id) FILTER (WHERE d.status = 'won') AS won_deals,
+    COALESCE(SUM(d.amount) FILTER (WHERE d.status = 'won'), 0) AS revenue,
+    COUNT(a.id) AS total_activities,
+    AVG(a.duration_minutes) FILTER (WHERE a.duration_minutes > 0) AS avg_activity_duration
+FROM employees e
+LEFT JOIN deals d ON d.responsible_employee_id = e.id 
+    AND DATE_TRUNC('month', d.actual_close_date) = DATE_TRUNC('month', CURRENT_DATE)
+LEFT JOIN activities a ON a.performed_by_employee_id = e.id
+    AND DATE_TRUNC('month', a.activity_date) = DATE_TRUNC('month', CURRENT_DATE)
+GROUP BY e.id, e.full_name;
+
+-- Представление 3: Сегментация клиентов ABC на основе выручки
+CREATE OR REPLACE VIEW vw_customer_abc AS
+WITH rev AS (
+    SELECT 
+        c.id,
+        c.name,
+        COALESCE(SUM(d.amount), 0) AS total_revenue
+    FROM companies c
+    LEFT JOIN deals d ON d.company_id = c.id AND d.status = 'won'
+    GROUP BY c.id, c.name
+),
+cumul AS (
+    SELECT 
+        name,
+        total_revenue,
+        SUM(total_revenue) OVER (ORDER BY total_revenue DESC) AS cumulative,
+        SUM(total_revenue) OVER () AS grand_total
+    FROM rev
+)
+SELECT 
+    name,
+    total_revenue,
+    ROUND(cumulative / NULLIF(grand_total, 0) * 100, 1) AS revenue_share_pct,
+    CASE 
+        WHEN cumulative / NULLIF(grand_total, 0) <= 0.8 THEN 'A'
+        WHEN cumulative / NULLIF(grand_total, 0) <= 0.95 THEN 'B'
+        ELSE 'C'
+    END AS segment
+FROM cumul
+ORDER BY total_revenue DESC;

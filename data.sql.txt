@@ -1,0 +1,80 @@
+INSERT INTO employees (full_name, email, position) VALUES
+('Иван Петров', 'i.petrov@crm.ru', 'Менеджер по продажам'),
+('Ольга Смирнова', 'o.smirnova@crm.ru', 'Старший менеджер'),
+('Алексей Иванов', 'a.ivanov@crm.ru', 'Руководитель отдела продаж');
+
+INSERT INTO lead_sources (name) VALUES
+('Сайт'), ('Рекомендация'), ('Выставка'), ('Холодный звонок');
+
+INSERT INTO pipeline_stages (name, order_num, probability) VALUES
+('Новый лид', 1, 0.1),
+('Квалификация', 2, 0.2),
+('Коммерческое предложение', 3, 0.5),
+('Переговоры', 4, 0.8),
+('Закрыто успешно', 5, 1.0),
+('Закрыто неуспешно', 6, 0.0);
+
+INSERT INTO activity_types (name) VALUES
+('Звонок'), ('Встреча'), ('Email'), ('Заметка');
+
+INSERT INTO products (name, unit_price) VALUES
+('CRM-лицензия (год)', 15000.00),
+('Услуги внедрения', 50000.00),
+('Техническая поддержка (месяц)', 10000.00),
+('Дополнительное обучение', 25000.00);
+
+INSERT INTO companies (name, industry, phone, email) VALUES
+('ООО Ромашка', 'Розничная торговля', '+79991110011', 'info@romashka.ru'),
+('ЗАО ТехноПро', 'ИТ', '+79992220022', 'contact@technopro.ru'),
+('ИП Сидоров', 'Услуги', '+79993330033', 'sidorov@ip.ru');
+
+INSERT INTO contacts (company_id, first_name, last_name, phone, email, position, is_primary, custom_fields) VALUES
+(1, 'Сергей', 'Цветочкин', '+79991110012', 's.tsvet@romashka.ru', 'Генеральный директор', true,
+ '{"preferred_language": "ru", "birthday": "1985-05-15"}'::jsonb),
+(1, 'Марина', 'Листова', '+79991110013', 'm.listova@romashka.ru', 'Бухгалтер', false,
+ '{"preferred_language": "ru"}'::jsonb),
+(2, 'Дмитрий', 'Кодеров', '+79992220023', 'd.koderov@technopro.ru', 'Технический директор', true,
+ '{"preferred_language": "en", "certificates": ["AWS", "Azure"]}'::jsonb),
+(3, 'Анна', 'Сидорова', '+79993330034', 'a.sidorova@ip.ru', 'Владелец', true, '{}'::jsonb);
+
+UPDATE companies SET primary_contact_id = 1 WHERE id = 1;
+UPDATE companies SET primary_contact_id = 3 WHERE id = 2;
+UPDATE companies SET primary_contact_id = 4 WHERE id = 3;
+
+INSERT INTO deals (title, company_id, contact_id, responsible_employee_id, stage_id, source_id, amount, expected_close_date, status, custom_fields)
+VALUES
+('Внедрение CRM Ромашка', 1, 1, 1, 3, 1, 95000.00, '2026-08-15', 'open',
+ '{"payment_terms": "50/50", "competitor": "Битрикс24"}'::jsonb),
+('Лицензии ТехноПро', 2, 3, 2, 4, 2, 150000.00, '2026-07-30', 'open',
+ '{"decision_makers": ["Дмитрий", "Совет директоров"]}'::jsonb),
+('Поддержка Сидоров', 3, 4, 1, 5, 3, 30000.00, '2026-06-15', 'won',
+ '{"payment_completed": true}'::jsonb),
+('Тестовая сделка', 1, 2, 1, 1, 4, 10000.00, '2026-09-01', 'open', '{}'::jsonb);
+
+INSERT INTO deal_items (deal_id, product_id, quantity, unit_price) VALUES
+(1, 1, 2, 15000.00),
+(1, 2, 1, 50000.00),
+(2, 1, 10, 15000.00),
+(3, 3, 3, 10000.00);
+
+INSERT INTO activities (deal_id, company_id, contact_id, type_id, performed_by_employee_id, subject, activity_date, duration_minutes, outcome)
+VALUES
+(1, 1, 1, 1, 1, 'Первичный звонок', '2026-06-01 10:00', 15, 'Договорились о встрече'),
+(1, 1, 1, 2, 1, 'Встреча в офисе', '2026-06-05 14:00', 90, 'Обсудили потребности'),
+(2, 2, 3, 1, 2, 'Звонок по рекомендации', '2026-06-10 11:30', 20, 'Заинтересованы'),
+(2, 2, 3, 2, 2, 'Презентация продукта', '2026-06-15 16:00', 60, 'Ожидают КП'),
+(3, 3, 4, 1, 1, 'Подтверждение оплаты', '2026-06-20 09:00', 5, 'Оплата получена');
+
+INSERT INTO xml_import_log (source_system, xml_data) VALUES
+('ExternalWeb', XMLPARSE(DOCUMENT '<leads>
+    <lead>
+        <name>Новая компания 1</name>
+        <contact>Иван</contact>
+        <phone>+79998887766</phone>
+    </lead>
+    <lead>
+        <name>Новая компания 2</name>
+        <contact>Петр</contact>
+        <phone>+79998887755</phone>
+    </lead>
+</leads>'));
