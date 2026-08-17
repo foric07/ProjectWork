@@ -1,0 +1,107 @@
+-- 1. Воронка продаж: количество сделок и сумма по этапам + конверсия
+-- Используется LAG для сравнения с предыдущим этапом
+WITH stage_totals AS (
+    SELECT 
+        ps.name AS stage_name,
+        ps.order_num,
+        COUNT(d.id) AS deals_count,
+        COALESCE(SUM(d.amount), 0) AS total_amount
+    FROM pipeline_stages ps
+    LEFT JOIN deals d ON d.stage_id = ps.id AND d.status = 'open'
+    GROUP BY ps.id, ps.name, ps.order_num
+)
+SELECT 
+    stage_name,
+    order_num,
+    deals_count,
+    total_amount,
+    LAG(deals_count) OVER (ORDER BY order_num) AS prev_count,
+    CASE 
+        WHEN LAG(deals_count) OVER (ORDER BY order_num) > 0 
+        THEN ROUND(deals_count::numeric / LAG(deals_count) OVER (ORDER BY order_num) * 100, 1)
+        ELSE NULL 
+    END AS conversion_pct
+FROM stage_totals
+ORDER BY order_num;
+
+-- 2. Эффективность сотрудников за 2026 год: выручка, количество закрытых сделок,
+-- среднее время закрытия, ранг по выручке
+WITH won_deals AS (
+    SELECT 
+        responsible_employee_id,
+        COUNT(*) AS won_count,
+        SUM(amount) AS revenue,
+        AVG(actual_close_date - created_at) AS avg_closure_days
+    FROM deals
+    WHERE status = 'won'
+        AND actual_close_date BETWEEN '2026-01-01' AND '2026-12-31'
+    GROUP BY responsible_employee_id
+)
+SELECT 
+    e.full_name,
+    wd.won_count,
+    wd.revenue,
+    wd.avg_closure_days,
+    RANK() OVER (ORDER BY wd.revenue DESC) AS revenue_rank
+FROM won_deals wd
+JOIN employees e ON e.id = wd.responsible_employee_id
+ORDER BY revenue DESC;
+
+-- 3. ABC-сегментация клиентов по сумме выигранных сделок
+WITH client_totals AS (
+    SELECT 
+        c.id AS company_id,
+        c.name,
+        SUM(d.amount) AS total_revenue
+    FROM companies c
+    JOIN deals d ON d.company_id = c.id AND d.status = 'won'
+    GROUP BY c.id, c.name
+),
+ranked AS (
+    SELECT 
+        name,
+        total_revenue,
+        SUM(total_revenue) OVER (ORDER BY total_revenue DESC) AS cumulative,
+        SUM(total_revenue) OVER () AS grand_total
+    FROM client_totals
+)
+SELECT 
+    name,
+    total_revenue,
+    ROUND(cumulative / grand_total * 100, 1) AS cumulative_pct,
+    CASE 
+        WHEN cumulative / grand_total <= 0.8 THEN 'A'
+        WHEN cumulative / grand_total <= 0.95 THEN 'B'
+        ELSE 'C'
+    END AS segment
+FROM ranked
+ORDER BY total_revenue DESC;
+
+-- 4. Динамика количества активностей по месяцам с сравнением с предыдущим месяцем
+WITH monthly AS (
+    SELECT 
+        DATE_TRUNC('month', activity_date) AS month,
+        COUNT(*) AS act_count
+    FROM activities
+    GROUP BY DATE_TRUNC('month', activity_date)
+)
+SELECT 
+    month,
+    act_count,
+    LAG(act_count) OVER (ORDER BY month) AS prev_month_count,
+    ROUND((act_count - LAG(act_count) OVER (ORDER BY month)) 
+          / NULLIF(LAG(act_count) OVER (ORDER BY month), 0) * 100, 1) AS growth_pct
+FROM monthly
+ORDER BY month;
+
+-- 5. Прогнозируемая выручка по ожидаемым сделкам (взвешенная сумма по вероятности)
+SELECT 
+    TO_CHAR(expected_close_date, 'YYYY-MM') AS expected_month,
+    COUNT(*) AS open_deals,
+    SUM(amount) AS total_potential,
+    SUM(amount * ps.probability) AS weighted_forecast
+FROM deals d
+JOIN pipeline_stages ps ON d.stage_id = ps.id
+WHERE d.status = 'open'
+GROUP BY expected_month
+ORDER BY expected_month;

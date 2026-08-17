@@ -1,0 +1,90 @@
+-- 1. Процедура перемещения сделки на новый этап с автоматической записью в историю -- Теперь процедура не только обновляет текущий этап сделки, но и фиксирует переход в новой таблице deal_stage_history
+CREATE OR REPLACE PROCEDURE move_deal_to_stage(
+    p_deal_id INTEGER,
+    p_new_stage_id INTEGER,
+    p_performed_by INTEGER,
+    p_notes TEXT DEFAULT 'Перемещена по этапу'
+)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_old_stage_id INTEGER;
+    v_company_id INTEGER;
+    v_contact_id INTEGER;
+BEGIN
+    -- Получаем текущий этап и связанные данные сделки
+    SELECT stage_id, company_id, contact_id 
+    INTO v_old_stage_id, v_company_id, v_contact_id
+    FROM deals 
+    WHERE id = p_deal_id;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Сделка с id % не найдена', p_deal_id;
+    END IF;
+
+    -- 1. Фиксируем переход в истории (обязательно перед обновлением сделки)
+    INSERT INTO deal_stage_history (deal_id, from_stage_id, to_stage_id, changed_by_employee_id, notes)
+    VALUES (p_deal_id, v_old_stage_id, p_new_stage_id, p_performed_by, p_notes);
+
+    -- 2. Обновляем текущий этап сделки
+    UPDATE deals
+    SET stage_id = p_new_stage_id,
+        updated_at = CURRENT_TIMESTAMP
+    WHERE id = p_deal_id;
+
+    -- 3. Если новый этап – финальный, меняем статус и дату закрытия
+    IF p_new_stage_id = (SELECT id FROM pipeline_stages WHERE name = 'Закрыто успешно') THEN
+        UPDATE deals SET status = 'won', actual_close_date = CURRENT_DATE WHERE id = p_deal_id;
+    ELSIF p_new_stage_id = (SELECT id FROM pipeline_stages WHERE name = 'Закрыто неуспешно') THEN
+        UPDATE deals SET status = 'lost', actual_close_date = CURRENT_DATE WHERE id = p_deal_id;
+    END IF;
+
+    -- 4. Пишем активность (как было раньше)
+    INSERT INTO activities (deal_id, company_id, contact_id, type_id, performed_by_employee_id, subject, outcome)
+    VALUES (p_deal_id, v_company_id, v_contact_id,
+            (SELECT id FROM activity_types WHERE name = 'Заметка'),
+            p_performed_by,
+            'Переход сделки на этап: ' || (SELECT name FROM pipeline_stages WHERE id = p_new_stage_id),
+            p_notes);
+END;
+$$;
+
+-- 2. Функция расчёта конверсии между двумя этапами -- Функция больше не использует LEAD по этапам, так как в deals нет истории. Теперь она анализирует реальные переходы из таблицы deal_stage_history
+CREATE OR REPLACE FUNCTION get_stage_conversion(
+    from_stage_name TEXT,
+    to_stage_name TEXT
+) RETURNS TABLE (
+    stage_from TEXT,
+    stage_to TEXT,
+    deals_from BIGINT,
+    deals_to BIGINT,
+    conversion NUMERIC
+)
+LANGUAGE sql
+AS $$
+WITH stage_ids AS (
+    SELECT 
+        (SELECT id FROM pipeline_stages WHERE name = from_stage_name) AS from_id,
+        (SELECT id FROM pipeline_stages WHERE name = to_stage_name) AS to_id
+),
+history_agg AS (
+    SELECT
+        s.from_id,
+        s.to_id,
+        (SELECT COUNT(DISTINCT deal_id) FROM deal_stage_history WHERE to_stage_id = s.from_id) AS total_from,
+        (SELECT COUNT(DISTINCT deal_id) FROM deal_stage_history WHERE from_stage_id = s.from_id AND to_stage_id = s.to_id) AS converted_to
+    FROM stage_ids s
+)
+SELECT 
+    from_stage_name,
+    to_stage_name,
+    total_from::BIGINT,
+    converted_to::BIGINT,
+    ROUND(
+        CASE 
+            WHEN total_from > 0 THEN (converted_to::numeric / total_from) * 100 
+            ELSE 0 
+        END, 1
+    ) AS conversion
+FROM history_agg;
+$$;

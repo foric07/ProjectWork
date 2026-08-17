@@ -1,0 +1,71 @@
+-- Оптимизация производительности
+
+-- 1. Дополнительные индексы (уже созданы в schema.sql)
+-- GIN-индексы для работы с JSONB
+-- Индексы по внешним ключам и датам
+
+-- 2. Материализованное представление для ускорения повторяющихся отчётов
+CREATE MATERIALIZED VIEW mv_sales_funnel_snapshot AS
+SELECT 
+    ps.name AS stage_name,
+    ps.order_num,
+    COUNT(d.id) AS deals_count,
+    COALESCE(SUM(d.amount), 0) AS total_amount,
+    COALESCE(SUM(d.amount * ps.probability), 0) AS weighted_amount
+FROM pipeline_stages ps
+LEFT JOIN deals d ON d.stage_id = ps.id AND d.status = 'open'
+GROUP BY ps.id, ps.name, ps.order_num
+ORDER BY ps.order_num;
+
+CREATE UNIQUE INDEX ON mv_sales_funnel_snapshot (order_num);
+
+-- Обновление материализованного представления (можно выполнять по расписанию)
+REFRESH MATERIALIZED VIEW CONCURRENTLY mv_sales_funnel_snapshot;
+
+-- 3. Пример анализа запроса (EXPLAIN ANALYZE)
+EXPLAIN ANALYZE
+SELECT 
+    e.full_name,
+    COUNT(d.id) FILTER (WHERE d.status = 'won') AS won,
+    SUM(d.amount) FILTER (WHERE d.status = 'won') AS revenue
+FROM employees e
+LEFT JOIN deals d ON d.responsible_employee_id = e.id
+    AND d.actual_close_date >= '2026-01-01'
+GROUP BY e.id, e.full_name;
+
+-- 4. Партиционирование таблицы activities по месяцам (опционально)
+-- Пример для PostgreSQL 13+
+-- CREATE TABLE activities_partitioned (
+--     id SERIAL,
+--     deal_id INTEGER,
+--     ...
+--     activity_date TIMESTAMP NOT NULL
+-- ) PARTITION BY RANGE (activity_date);
+-- CREATE TABLE activities_2026_01 PARTITION OF activities_partitioned
+--     FOR VALUES FROM ('2026-01-01') TO ('2026-02-01');
+-- ...
+
+-- 5. Использование JSONB для извлечения неструктурированных данных
+-- Пример: получить язык общения контактов
+SELECT 
+    id,
+    first_name,
+    last_name,
+    custom_fields->>'preferred_language' AS language
+FROM contacts
+WHERE custom_fields ? 'preferred_language';
+
+-- 6. Пример работы с XML: извлечение имён лидов из импорта
+SELECT 
+    (xpath('/leads/lead/name/text()', xml_data))[1]::text AS lead_name,
+    (xpath('/leads/lead/phone/text()', xml_data))[1]::text AS phone
+FROM xml_import_log,
+     LATERAL unnest(xpath('/leads/lead', xml_data)) AS lead;
+
+-- Пояснение к оптимизации
+-- Индексы: Созданы индексы по наиболее часто фильтруемым полям (status, stage_id, responsible_employee_id, даты). GIN-индексы для JSONB позволяют выполнять быстрый поиск по ключам и значениям внутри документов.
+-- Материализованное представление: mv_sales_funnel_snapshot хранит предвычисленную воронку, что сокращает время построения дашбордов. Обновляется по требованию.
+-- Партиционирование (опционально): Если таблица activities становится большой, разбиение по месяцам ускорит запросы, ограниченные временным диапазоном.
+-- Анализ EXPLAIN: Позволяет убедиться, что запросы используют индексы (Seq Scan заменён на Index Scan/Bitmap Index Scan).
+-- LATERAL + XML: Демонстрация обработки XML-данных напрямую в SQL без выгрузки.
+
