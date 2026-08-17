@@ -11,21 +11,36 @@ LEFT JOIN deals d ON d.stage_id = ps.id AND d.status = 'open'
 GROUP BY ps.id, ps.name, ps.order_num
 ORDER BY ps.order_num;
 
--- Представление 2: Показатели эффективности сотрудников (текущий месяц)
+-- Представление 2: Показатели эффективности сотрудников (текущий месяц) --- Устраняем умножение строк из-за одновременного LEFT JOIN к сделкам и активностям. Теперь агрегируем сделки и активности раздельно, а затем соединяем по сотруднику.
 CREATE OR REPLACE VIEW vw_employee_performance_current_month AS
+WITH deals_agg AS (
+    SELECT 
+        responsible_employee_id AS employee_id,
+        COUNT(*) FILTER (WHERE status = 'won') AS won_deals,
+        COALESCE(SUM(amount) FILTER (WHERE status = 'won'), 0) AS revenue
+    FROM deals
+    WHERE DATE_TRUNC('month', actual_close_date) = DATE_TRUNC('month', CURRENT_DATE)
+    GROUP BY responsible_employee_id
+),
+activities_agg AS (
+    SELECT 
+        performed_by_employee_id AS employee_id,
+        COUNT(*) AS total_activities,
+        AVG(duration_minutes) FILTER (WHERE duration_minutes > 0) AS avg_activity_duration
+    FROM activities
+    WHERE DATE_TRUNC('month', activity_date) = DATE_TRUNC('month', CURRENT_DATE)
+    GROUP BY performed_by_employee_id
+)
 SELECT 
     e.id,
     e.full_name,
-    COUNT(d.id) FILTER (WHERE d.status = 'won') AS won_deals,
-    COALESCE(SUM(d.amount) FILTER (WHERE d.status = 'won'), 0) AS revenue,
-    COUNT(a.id) AS total_activities,
-    AVG(a.duration_minutes) FILTER (WHERE a.duration_minutes > 0) AS avg_activity_duration
+    COALESCE(d.won_deals, 0) AS won_deals,
+    COALESCE(d.revenue, 0) AS revenue,
+    COALESCE(a.total_activities, 0) AS total_activities,
+    COALESCE(a.avg_activity_duration, 0) AS avg_activity_duration
 FROM employees e
-LEFT JOIN deals d ON d.responsible_employee_id = e.id 
-    AND DATE_TRUNC('month', d.actual_close_date) = DATE_TRUNC('month', CURRENT_DATE)
-LEFT JOIN activities a ON a.performed_by_employee_id = e.id
-    AND DATE_TRUNC('month', a.activity_date) = DATE_TRUNC('month', CURRENT_DATE)
-GROUP BY e.id, e.full_name;
+LEFT JOIN deals_agg d ON d.employee_id = e.id
+LEFT JOIN activities_agg a ON a.employee_id = e.id;
 
 -- Представление 3: Сегментация клиентов ABC на основе выручки
 CREATE OR REPLACE VIEW vw_customer_abc AS

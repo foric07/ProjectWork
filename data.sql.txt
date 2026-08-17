@@ -78,3 +78,14 @@ INSERT INTO xml_import_log (source_system, xml_data) VALUES
         <phone>+79998887755</phone>
     </lead>
 </leads>'));
+
+---------
+Добавляем данные для новой таблицы чтобы функция конверсии имела данные для расчёта.
+INSERT INTO deal_stage_history (deal_id, from_stage_id, to_stage_id, changed_by_employee_id, notes)
+SELECT 
+    d.id,
+    NULL,  -- начального этапа нет
+    d.stage_id,
+    d.responsible_employee_id,
+    'Создание сделки'
+FROM deals d;
